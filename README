@@ -1,7 +1,7 @@
 nradix
 
 Translated to Golang implementation of nginx's radix tree (allowing to store and lookup IP information)
-
+- Updated to support netip.Addr for improved performance
 
 This project is licensed under the terms of the MIT license.
 Read LICENSE file for information for all notices and permissions.

@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"errors"
 	"net"
+	"net/netip"
+	"sync"
 )
 
 type node struct {
@@ -15,12 +17,14 @@ type node struct {
 	value               interface{}
 }
 
-// Tree implements radix tree for working with IP/mask. Thread safety is not guaranteed, you should choose your own style of protecting safety of operations.
+// Tree implements a radix tree for working with IP/mask.
+// Thread safety is not guaranteed, you should choose your own style of protecting safety of operations.
 type Tree struct {
 	root *node
 	free *node
 
 	alloc []node
+	mutex sync.RWMutex
 }
 
 const (
@@ -34,7 +38,10 @@ var (
 	ErrBadIP    = errors.New("Bad IP address or mask")
 )
 
-// NewTree creates Tree and preallocates (if preallocate not zero) number of nodes that would be ready to fill with data.
+// NewTree initializes a Tree and preallocates a specified number of nodes ready to store data.
+// It creates a new Tree structure, sets up the root node, and optionally preallocates nodes
+// based on the number of bits specified. This is useful for optimizing the tree for a certain
+// number of entries.
 func NewTree(preallocate int) *Tree {
 	tree := new(Tree)
 	tree.root = tree.newnode()
@@ -55,7 +62,7 @@ func NewTree(preallocate int) *Tree {
 		mask |= startbit
 
 		for {
-			tree.insert32(key, mask, nil, false)
+			tree.insert4(key, mask, nil, false)
 			key += inc
 			if key == 0 { // magic bits collide
 				break
@@ -66,92 +73,116 @@ func NewTree(preallocate int) *Tree {
 	return tree
 }
 
-// AddCIDR adds value associated with IP/mask to the tree. Will return error for invalid CIDR or if value already exists.
-func (tree *Tree) AddCIDR(cidr string, val interface{}) error {
+// AddCIDRString adds a value associated with an IP/mask to the tree.
+// It locks the tree for writing, converts the CIDR string to bytes, and calls AddCIDRb.
+func (tree *Tree) AddCIDRString(cidr string, val interface{}) error {
+	tree.mutex.Lock()
+	defer tree.mutex.Unlock()
 	return tree.AddCIDRb([]byte(cidr), val)
 }
 
+// AddCIDRb adds a value associated with an IP/mask to the tree using byte slices.
+// It determines if the CIDR is IPv4 or IPv6, parses it, and inserts it into the tree.
 func (tree *Tree) AddCIDRb(cidr []byte, val interface{}) error {
 	if bytes.IndexByte(cidr, '.') > 0 {
 		ip, mask, err := parsecidr4(cidr)
 		if err != nil {
 			return err
 		}
-		return tree.insert32(ip, mask, val, false)
+		return tree.insert4(ip, mask, val, false)
 	}
 	ip, mask, err := parsecidr6(cidr)
 	if err != nil {
 		return err
 	}
-	return tree.insert(ip, mask, val, false)
+	return tree.insert6(ip, mask, val, false)
 }
 
-// AddCIDR adds value associated with IP/mask to the tree. Will return error for invalid CIDR or if value already exists.
-func (tree *Tree) SetCIDR(cidr string, val interface{}) error {
+// SetCIDRString sets a value associated with an IP/mask in the tree, overwriting any existing value.
+// It locks the tree for writing, converts the CIDR string to bytes, and calls SetCIDRb.
+func (tree *Tree) SetCIDRString(cidr string, val interface{}) error {
+	tree.mutex.Lock()
+	defer tree.mutex.Unlock()
 	return tree.SetCIDRb([]byte(cidr), val)
 }
 
+// SetCIDRb sets a value associated with an IP/mask in the tree using byte slices, overwriting any existing value.
+// It determines if the CIDR is IPv4 or IPv6, parses it, and inserts it into the tree with overwrite enabled.
 func (tree *Tree) SetCIDRb(cidr []byte, val interface{}) error {
 	if bytes.IndexByte(cidr, '.') > 0 {
 		ip, mask, err := parsecidr4(cidr)
 		if err != nil {
 			return err
 		}
-		return tree.insert32(ip, mask, val, true)
+		return tree.insert4(ip, mask, val, true)
 	}
 	ip, mask, err := parsecidr6(cidr)
 	if err != nil {
 		return err
 	}
-	return tree.insert(ip, mask, val, true)
+	return tree.insert6(ip, mask, val, true)
 }
 
-// DeleteWholeRangeCIDR removes all values associated with IPs
-// in the entire subnet specified by the CIDR.
+// DeleteWholeRangeCIDR removes all values associated with IPs in the entire subnet specified by the CIDR.
+// It locks the tree for writing, converts the CIDR string to bytes, and calls DeleteWholeRangeCIDRb.
 func (tree *Tree) DeleteWholeRangeCIDR(cidr string) error {
+	tree.mutex.Lock()
+	defer tree.mutex.Unlock()
 	return tree.DeleteWholeRangeCIDRb([]byte(cidr))
 }
 
+// DeleteWholeRangeCIDRb removes all values associated with IPs in the entire subnet specified by the CIDR using byte slices.
+// It determines if the CIDR is IPv4 or IPv6, parses it, and deletes the entire range from the tree.
 func (tree *Tree) DeleteWholeRangeCIDRb(cidr []byte) error {
 	if bytes.IndexByte(cidr, '.') > 0 {
 		ip, mask, err := parsecidr4(cidr)
 		if err != nil {
 			return err
 		}
-		return tree.delete32(ip, mask, true)
+		return tree.deleteIPv4(ip, mask, true)
 	}
 	ip, mask, err := parsecidr6(cidr)
 	if err != nil {
 		return err
 	}
-	return tree.delete(ip, mask, true)
+	return tree.deleteIPv6(ip, mask, true)
 }
 
-// DeleteCIDR removes value associated with IP/mask from the tree.
-func (tree *Tree) DeleteCIDR(cidr string) error {
+// DeleteCIDRString removes a value associated with an IP/mask from the tree.
+// It locks the tree for writing, converts the CIDR string to bytes, and calls DeleteCIDRb.
+func (tree *Tree) DeleteCIDRString(cidr string) error {
+	tree.mutex.Lock()
+	defer tree.mutex.Unlock()
 	return tree.DeleteCIDRb([]byte(cidr))
 }
 
+// DeleteCIDRb removes a value associated with an IP/mask from the tree using byte slices.
+// It determines if the CIDR is IPv4 or IPv6, parses it, and deletes the specific entry from the tree.
 func (tree *Tree) DeleteCIDRb(cidr []byte) error {
 	if bytes.IndexByte(cidr, '.') > 0 {
 		ip, mask, err := parsecidr4(cidr)
 		if err != nil {
 			return err
 		}
-		return tree.delete32(ip, mask, false)
+		return tree.deleteIPv4(ip, mask, false)
 	}
 	ip, mask, err := parsecidr6(cidr)
 	if err != nil {
 		return err
 	}
-	return tree.delete(ip, mask, false)
+	return tree.deleteIPv6(ip, mask, false)
 }
 
-// Find CIDR traverses tree to proper Node and returns previously saved information in longest covered IP.
-func (tree *Tree) FindCIDR(cidr string) (interface{}, error) {
+// FindCIDRString traverses the tree to the proper node and returns previously saved information in the longest covered IP.
+// It locks the tree for reading, converts the CIDR string to bytes, and calls FindCIDRb.
+func (tree *Tree) FindCIDRString(cidr string) (interface{}, error) {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
 	return tree.FindCIDRb([]byte(cidr))
 }
 
+// FindCIDRb traverses the tree to the proper node and returns previously saved information in the longest covered IP using byte slices.
+// It determines if the CIDR is IPv4 or IPv6, parses it, and finds the corresponding entry in the tree.
 func (tree *Tree) FindCIDRb(cidr []byte) (interface{}, error) {
 	if bytes.IndexByte(cidr, '.') > 0 {
 		ip, mask, err := parsecidr4(cidr)
@@ -164,10 +195,58 @@ func (tree *Tree) FindCIDRb(cidr []byte) (interface{}, error) {
 	if err != nil || ip == nil {
 		return nil, err
 	}
-	return tree.find(ip, mask), nil
+	return tree.find6(ip, mask), nil
 }
 
-func (tree *Tree) insert32(key, mask uint32, value interface{}, overwrite bool) error {
+// FindCIDRIPNet finds the value associated with a given net.IPNet.
+// It locks the tree for reading and determines if the IP is IPv4 or IPv6, then finds the corresponding entry in the tree.
+func (tree *Tree) FindCIDRIPNet(ipm net.IPNet) (interface{}, error) {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+	ip := ipm.IP
+	mask := ipm.Mask
+
+	if ip.To4() != nil {
+		var ipFlat uint32
+		ipFlat = uint32(ip[12])<<24 | uint32(ip[13])<<16 | uint32(ip[14])<<8 | uint32(ip[15])
+		return tree.find32(ipFlat, 0xffffffff), nil
+	}
+
+	return tree.find6(ipm.IP, mask), nil
+}
+
+// FindCIDRNetIP finds the value associated with a given net.IP.
+// It locks the tree for reading and determines if the IP is IPv4 or IPv6, then finds the corresponding entry in the tree.
+func (tree *Tree) FindCIDRNetIP(ip net.IP) (interface{}, error) {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+
+	if ip.To4() != nil {
+		var ipFlat uint32
+		ipFlat = uint32(ip[12])<<24 | uint32(ip[13])<<16 | uint32(ip[14])<<8 | uint32(ip[15])
+		return tree.find32(ipFlat, 0xffffffff), nil
+	}
+
+	ipm := net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+	return tree.find6(ipm.IP, ipm.Mask), nil
+}
+
+func (tree *Tree) FindCIDRNetIPAddr(nip netip.Addr) (interface{}, error) {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+
+	if nip.Is4() {
+		ipFlat := nip.As4()
+		return tree.find32(uint32(ipFlat[0])<<24|uint32(ipFlat[1])<<16|uint32(ipFlat[2])<<8|uint32(ipFlat[3]), 0xffffffff), nil
+	}
+
+	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(64, 64)}
+	return tree.find6(ipm.IP, ipm.Mask), nil
+}
+
+// insert4 inserts a value into the tree for a given IPv4 key and mask.
+// It traverses the tree based on the key and mask, creating new nodes as necessary, and sets the value at the appropriate node.
+func (tree *Tree) insert4(key, mask uint32, value interface{}, overwrite bool) error {
 	bit := startbit
 	node := tree.root
 	next := tree.root
@@ -206,7 +285,9 @@ func (tree *Tree) insert32(key, mask uint32, value interface{}, overwrite bool) 
 	return nil
 }
 
-func (tree *Tree) insert(key net.IP, mask net.IPMask, value interface{}, overwrite bool) error {
+// insert6 inserts a value into the tree for a given IPv6 key and mask.
+// It traverses the tree based on the key and mask, creating new nodes as necessary, and sets the value at the appropriate node.
+func (tree *Tree) insert6(key net.IP, mask net.IPMask, value interface{}, overwrite bool) error {
 	if len(key) != len(mask) {
 		return ErrBadIP
 	}
@@ -264,7 +345,9 @@ func (tree *Tree) insert(key net.IP, mask net.IPMask, value interface{}, overwri
 	return nil
 }
 
-func (tree *Tree) delete32(key, mask uint32, wholeRange bool) error {
+// deleteIPv4 removes a value from the tree for a given IPv4 key and mask.
+// It traverses the tree based on the key and mask, and removes the node if it is a leaf or clears the value if not.
+func (tree *Tree) deleteIPv4(key, mask uint32, wholeRange bool) error {
 	bit := startbit
 	node := tree.root
 	for node != nil && bit&mask != 0 {
@@ -312,7 +395,9 @@ func (tree *Tree) delete32(key, mask uint32, wholeRange bool) error {
 	return nil
 }
 
-func (tree *Tree) delete(key net.IP, mask net.IPMask, wholeRange bool) error {
+// deleteIPv6 removes a value from the tree for a given IPv6 key and mask.
+// It traverses the tree based on the key and mask, and removes the node if it is a leaf or clears the value if not.
+func (tree *Tree) deleteIPv6(key net.IP, mask net.IPMask, wholeRange bool) error {
 	if len(key) != len(mask) {
 		return ErrBadIP
 	}
@@ -371,14 +456,16 @@ func (tree *Tree) delete(key net.IP, mask net.IPMask, wholeRange bool) error {
 	return nil
 }
 
-func (tree *Tree) find32(key, mask uint32) (value interface{}) {
+// find32 finds the value associated with a given IPv4 key and mask.
+// It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
+func (tree *Tree) find32(ipv4 uint32, mask uint32) (value interface{}) {
 	bit := startbit
 	node := tree.root
 	for node != nil {
 		if node.value != nil {
 			value = node.value
 		}
-		if key&bit != 0 {
+		if ipv4&bit != 0 {
 			node = node.right
 		} else {
 			node = node.left
@@ -392,7 +479,9 @@ func (tree *Tree) find32(key, mask uint32) (value interface{}) {
 	return value
 }
 
-func (tree *Tree) find(key net.IP, mask net.IPMask) (value interface{}) {
+// find6 finds the value associated with a given IPv6 key and mask.
+// It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
+func (tree *Tree) find6(key net.IP, mask net.IPMask) (value interface{}) {
 	if len(key) != len(mask) {
 		return ErrBadIP
 	}
@@ -425,6 +514,8 @@ func (tree *Tree) find(key net.IP, mask net.IPMask) (value interface{}) {
 	return value
 }
 
+// newnode creates a new node for the tree, reusing a node from the free list if available.
+// It initializes the node's fields and returns a pointer to the new node.
 func (tree *Tree) newnode() (p *node) {
 	if tree.free != nil {
 		p = tree.free
@@ -449,6 +540,8 @@ func (tree *Tree) newnode() (p *node) {
 	return &(tree.alloc[ln])
 }
 
+// loadip4 converts an IPv4 address from a byte slice to a uint32 representation.
+// It parses the address, ensuring it is valid, and returns the 32-bit representation.
 func loadip4(ipstr []byte) (uint32, error) {
 	var (
 		ip  uint32
@@ -484,6 +577,8 @@ func loadip4(ipstr []byte) (uint32, error) {
 	return ip<<8 + oct, nil
 }
 
+// parsecidr4 parses a CIDR notation IPv4 address and returns the IP and mask as uint32 values.
+// It extracts the IP and mask from the CIDR string, ensuring they are valid, and returns them.
 func parsecidr4(cidr []byte) (uint32, uint32, error) {
 	var mask uint32
 	p := bytes.IndexByte(cidr, '/')
@@ -506,6 +601,8 @@ func parsecidr4(cidr []byte) (uint32, uint32, error) {
 	return ip, mask, nil
 }
 
+// parsecidr6 parses a CIDR notation IPv6 address and returns the IP and mask as net.IP and net.IPMask.
+// It extracts the IP and mask from the CIDR string, ensuring they are valid, and returns them.
 func parsecidr6(cidr []byte) (net.IP, net.IPMask, error) {
 	p := bytes.IndexByte(cidr, '/')
 	if p > 0 {
