@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -721,4 +722,81 @@ func parsecidr6(cidr []byte) (net.IP, net.IPMask, error) {
 		return nil, nil, ErrBadIP
 	}
 	return ip, net.IPMask{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, nil
+}
+
+// WalkFunc is the type of the function called for each node visited by Walk.
+// The path argument contains the prefix leading to this node.
+// If the function returns an error, walking stops and the error is returned.
+type WalkFunc func(prefix string, value interface{}) error
+
+// Walk traverses the tree in-order, calling walkFn for each node that contains a value.
+// The walk function receives the CIDR prefix as a string and the value stored at that node.
+func (tree *Tree) Walk(walkFn WalkFunc) error {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+	return tree.walk(tree.root, []byte{}, 0, walkFn)
+}
+
+func (tree *Tree) walk(n *node, path []byte, depth int, walkFn WalkFunc) error {
+	if n == nil {
+		return nil
+	}
+
+	// Walk left subtree
+	if n.left != nil {
+		newPath := append(path, '0')
+		if err := tree.walk(n.left, newPath, depth+1, walkFn); err != nil {
+			return err
+		}
+	}
+
+	// Process current node if it has a value
+	if n.value != nil {
+		prefix := fmt.Sprintf("%s/%d", formatPath(path), depth)
+		if err := walkFn(prefix, n.value); err != nil {
+			return err
+		}
+	}
+
+	// Walk right subtree
+	if n.right != nil {
+		newPath := append(path, '1')
+		if err := tree.walk(n.right, newPath, depth+1, walkFn); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// formatPath converts a binary path to a CIDR prefix
+func formatPath(path []byte) string {
+	if len(path) == 0 {
+		return "*"
+	}
+
+	// Convert binary path to IP address string
+	var ip net.IP
+	if len(path) <= 32 { // IPv4
+		ipInt := uint32(0)
+		for _, b := range path {
+			ipInt = (ipInt << 1) | uint32(b-'0')
+		}
+		ip = make(net.IP, 4)
+		binary.BigEndian.PutUint32(ip, ipInt)
+	} else { // IPv6
+		ip = make(net.IP, 16)
+		for i := 0; i < len(path); i += 8 {
+			end := i + 8
+			if end > len(path) {
+				end = len(path)
+			}
+			b := byte(0)
+			for j := i; j < end; j++ {
+				b = (b << 1) | (path[j] - '0')
+			}
+			ip[i/8] = b
+		}
+	}
+	return ip.String()
 }
