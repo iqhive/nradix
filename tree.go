@@ -227,6 +227,39 @@ func (tree *Tree) DeleteCIDRString(cidr string) error {
 	return tree.DeleteCIDRb([]byte(cidr))
 }
 
+// DeleteCIDRNetIP removes a value associated with a net.IP and net.IPMask from the tree.
+// It locks the tree for writing, determines if the IP is IPv4 or IPv6, and deletes the specific entry from the tree.
+// For IPv4 addresses, it converts the IP and mask to uint32 format before deletion.
+func (tree *Tree) DeleteCIDRNetIP(ip net.IP, mask net.IPMask) error {
+	tree.mutex.Lock()
+	defer tree.mutex.Unlock()
+	if len(ip) == 4 {
+		return tree.deleteIPv4(uint32(ip[0])<<24|uint32(ip[1])<<16|uint32(ip[2])<<8|uint32(ip[3]), uint32(mask[0])<<24|uint32(mask[1])<<16|uint32(mask[2])<<8|uint32(mask[3]), false)
+	}
+	return tree.deleteIPv6(ip, mask, false)
+}
+
+// DeleteCIDRNetIPAddr removes a value associated with a netip.Addr and netip.Prefix from the tree.
+// It locks the tree for writing, determines if the IP is IPv4 or IPv6, and deletes the specific entry from the tree.
+// For IPv4 addresses, it uses pre-computed masks from a cache for better performance.
+func (tree *Tree) DeleteCIDRNetIPAddr(ip netip.Addr, mask netip.Prefix) error {
+	tree.mutex.Lock()
+	defer tree.mutex.Unlock()
+
+	if ip.Is4() {
+		ipv4 := ip.As4()
+		ipFlat := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
+		// Pre-compute common masks to avoid shifts
+		maskBits := ipv4MaskCache[mask.Bits()]
+		return tree.deleteIPv4(ipFlat, maskBits, false)
+	}
+
+	// For IPv6, convert to net.IP and net.IPMask
+	ipv6 := ip.As16()
+	maskv6 := getIPv6Mask(mask.Bits())
+	return tree.deleteIPv6(ipv6[:], maskv6[:], false)
+}
+
 // DeleteCIDRb removes a value associated with an IP/mask from the tree using byte slices.
 // It determines if the CIDR is IPv4 or IPv6, parses it, and deletes the specific entry from the tree.
 func (tree *Tree) DeleteCIDRb(cidr []byte) error {
