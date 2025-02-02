@@ -727,76 +727,150 @@ func parsecidr6(cidr []byte) (net.IP, net.IPMask, error) {
 // WalkFunc is the type of the function called for each node visited by Walk.
 // The path argument contains the prefix leading to this node.
 // If the function returns an error, walking stops and the error is returned.
-type WalkFunc func(prefix string, value interface{}) error
+type WalkFunc func(prefix netip.Prefix, value interface{}) error
+type WalkFuncStr func(prefix string, value interface{}) error
 
 // Walk traverses the tree in-order, calling walkFn for each node that contains a value.
 // The walk function receives the CIDR prefix as a string and the value stored at that node.
-func (tree *Tree) Walk(walkFn WalkFunc) error {
+func (tree *Tree) WalkV4(walkFn WalkFunc) error {
 	tree.mutex.RLock()
 	defer tree.mutex.RUnlock()
-	return tree.walk(tree.root, []byte{}, 0, walkFn)
+
+	// Initialize with a valid prefix, e.g., an empty IPv4 address with a prefix length of 0
+	initialPrefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), 0)
+
+	return tree.walk(tree.root, initialPrefix, 0, walkFn)
+}
+func (tree *Tree) WalkV6(walkFn WalkFunc) error {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+
+	// Initialize with a valid IPv6 prefix, e.g., an empty IPv6 address with a prefix length of 0
+	initialPrefix := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
+
+	return tree.walk(tree.root, initialPrefix, 0, walkFn)
 }
 
-func (tree *Tree) walk(n *node, path []byte, depth int, walkFn WalkFunc) error {
-	if n == nil {
-		return nil
-	}
+// WalkString traverses the tree in-order, calling walkFn for each node that contains a value.
+// The walk function receives the CIDR prefix as a string and the value stored at that node.
+func (tree *Tree) WalkV4String(walkFn WalkFuncStr) error {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
 
-	// Walk left subtree
-	if n.left != nil {
-		newPath := append(path, '0')
-		if err := tree.walk(n.left, newPath, depth+1, walkFn); err != nil {
-			return err
-		}
+	// Initialize with a valid prefix, e.g., an empty IPv4 address with a prefix length of 0
+	initialPrefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), 0)
+
+	return tree.walkString(tree.root, initialPrefix, 0, walkFn)
+}
+func (tree *Tree) WalkV6String(walkFn WalkFuncStr) error {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+
+	// Initialize with a valid prefix, e.g., an empty IPv6 address with a prefix length of 0
+	initialPrefix := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
+
+	return tree.walkString(tree.root, initialPrefix, 0, walkFn)
+}
+
+func (tree *Tree) walk(n *node, prefix netip.Prefix, depth int, walkFn WalkFunc) error {
+	if n == nil {
+		return errors.New("node is nil")
 	}
 
 	// Process current node if it has a value
 	if n.value != nil {
-		prefix := fmt.Sprintf("%s/%d", formatPath(path), depth)
 		if err := walkFn(prefix, n.value); err != nil {
-			return err
+			return fmt.Errorf("error processing node value: %w", err)
+		}
+	}
+
+	// Walk left subtree
+	if n.left != nil {
+		leftAddr, ok := setBitAtDepth(prefix.Addr(), depth, false)
+		if !ok {
+			return fmt.Errorf("failed to set bit at depth %d", depth)
+		}
+		leftPrefix := netip.PrefixFrom(leftAddr, depth+1)
+		if err := tree.walk(n.left, leftPrefix, depth+1, walkFn); err != nil {
+			return fmt.Errorf("error walking left subtree: %w", err)
 		}
 	}
 
 	// Walk right subtree
 	if n.right != nil {
-		newPath := append(path, '1')
-		if err := tree.walk(n.right, newPath, depth+1, walkFn); err != nil {
-			return err
+		rightAddr, ok := setBitAtDepth(prefix.Addr(), depth, true)
+		if !ok {
+			return fmt.Errorf("failed to set bit at depth %d", depth)
+		}
+		rightPrefix := netip.PrefixFrom(rightAddr, depth+1)
+		if err := tree.walk(n.right, rightPrefix, depth+1, walkFn); err != nil {
+			return fmt.Errorf("error walking right subtree: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// formatPath converts a binary path to a CIDR prefix
-func formatPath(path []byte) string {
-	if len(path) == 0 {
-		return "*"
+// Helper function to set a specific bit in the address at a given depth
+func setBitAtDepth(addr netip.Addr, depth int, isRight bool) (netip.Addr, bool) {
+	// Convert the address to a mutable byte slice
+	addrBytes := addr.AsSlice()
+	byteIndex := depth / 8
+	bitIndex := depth % 8
+
+	if byteIndex < len(addrBytes) {
+		if isRight {
+			addrBytes[byteIndex] |= (1 << (7 - bitIndex))
+		} else {
+			addrBytes[byteIndex] &^= (1 << (7 - bitIndex))
+		}
 	}
 
-	// Convert binary path to IP address string
-	var ip net.IP
-	if len(path) <= 32 { // IPv4
-		ipInt := uint32(0)
-		for _, b := range path {
-			ipInt = (ipInt << 1) | uint32(b-'0')
-		}
-		ip = make(net.IP, 4)
-		binary.BigEndian.PutUint32(ip, ipInt)
-	} else { // IPv6
-		ip = make(net.IP, 16)
-		for i := 0; i < len(path); i += 8 {
-			end := i + 8
-			if end > len(path) {
-				end = len(path)
-			}
-			b := byte(0)
-			for j := i; j < end; j++ {
-				b = (b << 1) | (path[j] - '0')
-			}
-			ip[i/8] = b
+	// Reconstruct the address from the modified byte slice
+	return netip.AddrFromSlice(addrBytes)
+}
+
+func (tree *Tree) walkString(n *node, prefix netip.Prefix, depth int, walkFn WalkFuncStr) error {
+	if n == nil {
+		return errors.New("node is nil")
+	}
+
+	// Process current node if it has a value
+	if n.value != nil {
+		cidrString := formatPrefixToCIDR(prefix)
+		if err := walkFn(cidrString, n.value); err != nil {
+			return fmt.Errorf("error processing node value: %w", err)
 		}
 	}
-	return ip.String()
+
+	// Walk left subtree
+	if n.left != nil {
+		leftAddr, ok := setBitAtDepth(prefix.Addr(), depth, false)
+		if !ok {
+			return fmt.Errorf("failed to set bit at depth %d", depth)
+		}
+		leftPrefix := netip.PrefixFrom(leftAddr, depth+1)
+		if err := tree.walkString(n.left, leftPrefix, depth+1, walkFn); err != nil {
+			return fmt.Errorf("error walking left subtree: %w", err)
+		}
+	}
+
+	// Walk right subtree
+	if n.right != nil {
+		rightAddr, ok := setBitAtDepth(prefix.Addr(), depth, true)
+		if !ok {
+			return fmt.Errorf("failed to set bit at depth %d", depth)
+		}
+		rightPrefix := netip.PrefixFrom(rightAddr, depth+1)
+		if err := tree.walkString(n.right, rightPrefix, depth+1, walkFn); err != nil {
+			return fmt.Errorf("error walking right subtree: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// formatPrefixToCIDR converts a netip.Prefix to a CIDR string
+func formatPrefixToCIDR(prefix netip.Prefix) string {
+	return prefix.String()
 }
