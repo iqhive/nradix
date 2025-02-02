@@ -313,7 +313,7 @@ func (tree *Tree) FindCIDRIPNet(ipm net.IPNet) (interface{}, error) {
 
 	if ip.To4() != nil {
 		var ipFlat uint32
-		ipFlat = uint32(ip[12])<<24 | uint32(ip[13])<<16 | uint32(ip[14])<<8 | uint32(ip[15])
+		ipFlat = uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
 		return tree.find32(ipFlat, 0xffffffff), nil
 	}
 
@@ -328,7 +328,7 @@ func (tree *Tree) FindCIDRNetIP(ip net.IP) (interface{}, error) {
 
 	if ip.To4() != nil {
 		var ipFlat uint32
-		ipFlat = uint32(ip[12])<<24 | uint32(ip[13])<<16 | uint32(ip[14])<<8 | uint32(ip[15])
+		ipFlat = uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
 		return tree.find32(ipFlat, 0xffffffff), nil
 	}
 
