@@ -22,7 +22,9 @@ type node struct {
 // Tree implements a radix tree for working with IP/mask.
 // Thread safety is not guaranteed, you should choose your own style of protecting safety of operations.
 type Tree struct {
-	root *node
+	root   *node
+	rootV4 *node // TODO:create a short-cut for IPv4 lookups, deep in the tree
+
 	free *node
 
 	alloc []node
@@ -47,13 +49,17 @@ var (
 func NewTree(preallocate int) *Tree {
 	tree := new(Tree)
 	tree.root = tree.newnode()
+
+	// Set up the IPv4 root node to optimise IPv4 lookups
+	tree.setupIPv4Root()
+
 	if preallocate == 0 {
 		return tree
 	}
 
-	// Simplification, static preallocate max 6 bits
-	if preallocate > 6 || preallocate < 0 {
-		preallocate = 6
+	// Simplification, static preallocate max 8 bits
+	if preallocate > 8 || preallocate < 0 {
+		preallocate = 8
 	}
 
 	var key, mask uint32
@@ -73,6 +79,51 @@ func NewTree(preallocate int) *Tree {
 	}
 
 	return tree
+}
+
+// setupIPv4Root creates a shortcut node for IPv4 lookups at the ::ffff:0:0/96 position
+func (tree *Tree) setupIPv4Root() {
+	// Create the IPv4-mapped IPv6 prefix (::ffff:0:0/96)
+	ipv6 := make([]byte, 16)
+	ipv6[10] = 0xff
+	ipv6[11] = 0xff
+
+	// Create mask for first 96 bits
+	mask := make([]byte, 16)
+	for i := 0; i < 12; i++ {
+		mask[i] = 0xff
+	}
+
+	// Navigate to or create the IPv4 root node
+	var i int
+	bit := startbyte
+	node := tree.root
+	for i < 12 { // First 96 bits (12 bytes)
+		next := node.right
+		if (ipv6[i] & bit) == 0 {
+			next = node.left
+		}
+
+		if next == nil {
+			next = tree.newnode()
+			next.parent = node
+			if (ipv6[i] & bit) != 0 {
+				node.right = next
+			} else {
+				node.left = next
+			}
+		}
+
+		node = next
+
+		if bit >>= 1; bit == 0 {
+			i++
+			bit = startbyte
+		}
+	}
+
+	// Store this node as the IPv4 root
+	tree.rootV4 = node
 }
 
 // AddCIDRString adds a value associated with an IP/mask to the tree.
@@ -116,6 +167,28 @@ func (tree *Tree) AddCIDRNetIPAddr(ip netip.Addr, mask netip.Prefix, val interfa
 	// For IPv6, use a pre-computed mask table or simplified mask creation
 	ipv6 := ip.As16()
 	maskv6 := getIPv6Mask(mask.Bits()) // Implementation below
+	return tree.insert6(ipv6[:], maskv6[:], val, false)
+}
+
+// AddCIDRNetIPPrefix adds a value associated with a netip.Prefix to the tree.
+// It locks the tree for writing, determines if the IP is IPv4 or IPv6, and inserts it into the tree.
+// For IPv4 addresses, it uses pre-computed masks from a cache for better performance.
+func (tree *Tree) AddCIDRNetIPPrefix(prefix netip.Prefix, val interface{}) error {
+	tree.mutex.Lock()
+	defer tree.mutex.Unlock()
+
+	if prefix.Addr().Is4() {
+		ipv4 := prefix.Addr().As4()
+		ipFlat := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
+		// Pre-compute common masks to avoid shifts
+		maskBits := ipv4MaskCache[prefix.Bits()]
+		return tree.insert4(ipFlat, maskBits, val, false)
+	}
+
+	// For IPv6, use a pre-computed mask table or simplified mask creation
+	ipv6 := prefix.Addr().As16()
+	maskv6 := getIPv6Mask(prefix.Bits())
+
 	return tree.insert6(ipv6[:], maskv6[:], val, false)
 }
 
@@ -352,42 +425,35 @@ func (tree *Tree) FindCIDRNetIPAddr(nip netip.Addr) (interface{}, error) {
 // insert4 inserts a value into the tree for a given IPv4 key and mask.
 // It traverses the tree based on the key and mask, creating new nodes as necessary, and sets the value at the appropriate node.
 func (tree *Tree) insert4(key, mask uint32, value interface{}, overwrite bool) error {
-	bit := startbit
-	node := tree.root
-	next := tree.root
-	for bit&mask != 0 {
-		if key&bit != 0 {
-			next = node.right
-		} else {
-			next = node.left
-		}
-		if next == nil {
-			break
-		}
-		bit = bit >> 1
-		node = next
+	// Convert IPv4 to IPv4-mapped IPv6 address
+	ipv6 := make([]byte, 16)
+	// Explicitly set first 10 bytes to 0x00
+	for i := 0; i < 10; i++ {
+		ipv6[i] = 0x00
 	}
-	if next != nil {
-		if node.value != nil && !overwrite {
-			return ErrNodeBusy
-		}
-		node.value = value
-		return nil
-	}
-	for bit&mask != 0 {
-		next = tree.newnode()
-		next.parent = node
-		if key&bit != 0 {
-			node.right = next
-		} else {
-			node.left = next
-		}
-		bit >>= 1
-		node = next
-	}
-	node.value = value
+	// Set the IPv4-mapped IPv6 prefix (::ffff:)
+	ipv6[10] = 0xff
+	ipv6[11] = 0xff
+	// Add the IPv4 address
+	ipv6[12] = byte(key >> 24)
+	ipv6[13] = byte(key >> 16)
+	ipv6[14] = byte(key >> 8)
+	ipv6[15] = byte(key)
 
-	return nil
+	// Create IPv6 mask from IPv4 mask
+	maskv6 := make([]byte, 16)
+	for i := 0; i < 12; i++ {
+		maskv6[i] = 0xff
+	}
+	// First 12 bytes should be 0x00 for IPv4-mapped IPv6
+	// Only the IPv4 portion should be masked
+	// Last 4 bytes contain the IPv4 mask
+	maskv6[12] = byte(mask >> 24)
+	maskv6[13] = byte(mask >> 16)
+	maskv6[14] = byte(mask >> 8)
+	maskv6[15] = byte(mask)
+
+	return tree.insert6(ipv6, maskv6, value, overwrite)
 }
 
 // insert6 inserts a value into the tree for a given IPv6 key and mask.
@@ -396,7 +462,6 @@ func (tree *Tree) insert6(key net.IP, mask net.IPMask, value interface{}, overwr
 	if len(key) != len(mask) {
 		return ErrBadIP
 	}
-
 	var i int
 	bit := startbyte
 	node := tree.root
@@ -453,51 +518,26 @@ func (tree *Tree) insert6(key net.IP, mask net.IPMask, value interface{}, overwr
 // deleteIPv4 removes a value from the tree for a given IPv4 key and mask.
 // It traverses the tree based on the key and mask, and removes the node if it is a leaf or clears the value if not.
 func (tree *Tree) deleteIPv4(key, mask uint32, wholeRange bool) error {
-	bit := startbit
-	node := tree.root
-	for node != nil && bit&mask != 0 {
-		if key&bit != 0 {
-			node = node.right
-		} else {
-			node = node.left
-		}
-		bit >>= 1
-	}
-	if node == nil {
-		return ErrNotFound
-	}
+	// Convert IPv4 to IPv4-mapped IPv6 address
+	ipv6 := make([]byte, 16)
+	ipv6[10] = 0xff
+	ipv6[11] = 0xff
+	ipv6[12] = byte(key >> 24)
+	ipv6[13] = byte(key >> 16)
+	ipv6[14] = byte(key >> 8)
+	ipv6[15] = byte(key)
 
-	if !wholeRange && (node.right != nil || node.left != nil) {
-		// keep it just trim value
-		if node.value != nil {
-			node.value = nil
-			return nil
-		}
-		return ErrNotFound
+	// Create IPv6 mask from IPv4 mask
+	maskv6 := make([]byte, 16)
+	for i := 0; i < 12; i++ {
+		maskv6[i] = 0xff
 	}
+	maskv6[12] = byte(mask >> 24)
+	maskv6[13] = byte(mask >> 16)
+	maskv6[14] = byte(mask >> 8)
+	maskv6[15] = byte(mask)
 
-	// need to trim leaf
-	for {
-		if node.parent.right == node {
-			node.parent.right = nil
-		} else {
-			node.parent.left = nil
-		}
-		// reserve this node for future use
-		node.right = tree.free
-		tree.free = node
-		// move to parent, check if it's free of value and children
-		node = node.parent
-		if node.right != nil || node.left != nil || node.value != nil {
-			break
-		}
-		// do not delete root node
-		if node.parent == nil {
-			break
-		}
-	}
-
-	return nil
+	return tree.deleteIPv6(ipv6, maskv6, wholeRange)
 }
 
 // deleteIPv6 removes a value from the tree for a given IPv6 key and mask.
@@ -564,24 +604,52 @@ func (tree *Tree) deleteIPv6(key net.IP, mask net.IPMask, wholeRange bool) error
 // find32 finds the value associated with a given IPv4 key and mask.
 // It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
 func (tree *Tree) find32(ipv4 uint32, mask uint32) (value interface{}) {
-	bit := startbit
-	node := tree.root
-	for node != nil {
-		if node.value != nil {
-			value = node.value
-		}
-		if ipv4&bit != 0 {
-			node = node.right
-		} else {
-			node = node.left
-		}
-		if mask&bit == 0 {
-			break
-		}
-		bit >>= 1
+	// Start from IPv4 root if available
+	if tree.rootV4 != nil {
+		node := tree.rootV4
+		bit := startbit
+		value = node.value // Store initial value if exists
 
+		for node != nil && bit != 0 {
+			if mask&bit == 0 { // Move mask check to start of loop
+				break
+			}
+
+			if ipv4&bit != 0 {
+				node = node.right
+			} else {
+				node = node.left
+			}
+
+			if node != nil && node.value != nil {
+				value = node.value
+			}
+
+			bit >>= 1
+		}
+		return value
 	}
-	return value
+
+	// Fall back to existing IPv6-mapped path if rootV4 is not set
+	ipv6 := make([]byte, 16)
+	ipv6[10] = 0xff
+	ipv6[11] = 0xff
+	ipv6[12] = byte(ipv4 >> 24)
+	ipv6[13] = byte(ipv4 >> 16)
+	ipv6[14] = byte(ipv4 >> 8)
+	ipv6[15] = byte(ipv4)
+
+	// Create IPv6 mask
+	maskv6 := make([]byte, 16)
+	for i := 0; i < 12; i++ {
+		maskv6[i] = 0xff
+	}
+	maskv6[12] = byte(mask >> 24)
+	maskv6[13] = byte(mask >> 16)
+	maskv6[14] = byte(mask >> 8)
+	maskv6[15] = byte(mask)
+
+	return tree.find6(ipv6, maskv6)
 }
 
 // find6 finds the value associated with a given IPv6 key and mask.
@@ -728,7 +796,6 @@ func parsecidr6(cidr []byte) (net.IP, net.IPMask, error) {
 // The path argument contains the prefix leading to this node.
 // If the function returns an error, walking stops and the error is returned.
 type WalkFunc func(prefix netip.Prefix, value interface{}) error
-type WalkFuncStr func(prefix string, value interface{}) error
 
 // Walk traverses the tree in-order, calling walkFn for each node that contains a value.
 // The walk function receives the CIDR prefix as a string and the value stored at that node.
@@ -736,45 +803,56 @@ func (tree *Tree) WalkV4(walkFn WalkFunc) error {
 	tree.mutex.RLock()
 	defer tree.mutex.RUnlock()
 
-	// Initialize with a valid prefix, e.g., an empty IPv4 address with a prefix length of 0
-	initialPrefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), 0)
+	// Wrapper function to call walkFn only for IPv4 or IPv4-mapped IPv6 prefixes
+	walkFnWrapper := func(prefix netip.Prefix, value interface{}) error {
+		if prefix.Addr().Is4In6() {
+			ip4prefix := netip.PrefixFrom(netip.AddrFrom4(prefix.Addr().As4()), prefix.Bits()-96)
+			// ip4prefix := netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+			return walkFn(ip4prefix, value)
+		} else if prefix.Addr().Is4() {
+			return walkFn(prefix, value)
+		}
+		return nil
+	}
 
-	return tree.walk(tree.root, initialPrefix, 0, walkFn)
+	initialPrefix := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
+	return tree.walk(tree.root, initialPrefix, 0, walkFnWrapper)
 }
+
 func (tree *Tree) WalkV6(walkFn WalkFunc) error {
 	tree.mutex.RLock()
 	defer tree.mutex.RUnlock()
 
+	// Wrapper function to call walkFn only for IPv6 prefixes
+	walkFnWrapper := func(prefix netip.Prefix, value interface{}) error {
+		if prefix.Addr().Is6() && !prefix.Addr().Is4In6() {
+			return walkFn(prefix, value)
+		}
+		return nil
+	}
+
 	// Initialize with a valid IPv6 prefix, e.g., an empty IPv6 address with a prefix length of 0
 	initialPrefix := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
-
-	return tree.walk(tree.root, initialPrefix, 0, walkFn)
-}
-
-// WalkString traverses the tree in-order, calling walkFn for each node that contains a value.
-// The walk function receives the CIDR prefix as a string and the value stored at that node.
-func (tree *Tree) WalkV4String(walkFn WalkFuncStr) error {
-	tree.mutex.RLock()
-	defer tree.mutex.RUnlock()
-
-	// Initialize with a valid prefix, e.g., an empty IPv4 address with a prefix length of 0
-	initialPrefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), 0)
-
-	return tree.walkString(tree.root, initialPrefix, 0, walkFn)
-}
-func (tree *Tree) WalkV6String(walkFn WalkFuncStr) error {
-	tree.mutex.RLock()
-	defer tree.mutex.RUnlock()
-
-	// Initialize with a valid prefix, e.g., an empty IPv6 address with a prefix length of 0
-	initialPrefix := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
-
-	return tree.walkString(tree.root, initialPrefix, 0, walkFn)
+	return tree.walk(tree.root, initialPrefix, 0, walkFnWrapper)
 }
 
 func (tree *Tree) walk(n *node, prefix netip.Prefix, depth int, walkFn WalkFunc) error {
 	if n == nil {
 		return errors.New("node is nil")
+	}
+
+	// Don't go deeper than 128 bits (the full IPv6 length).
+	// For IPv4-mapped addresses, bits [0..95] are ::ffff: and bits [96..127] are the real IPv4.
+	// Once depth == 128, we have exhausted all bits.
+	const maxDepth = 128
+	if depth >= maxDepth {
+		// If there's a value here, report it; otherwise just return.
+		if n.value != nil {
+			if err := walkFn(prefix, n.value); err != nil {
+				return fmt.Errorf("error processing node value at max depth: %w", err)
+			}
+		}
+		return nil
 	}
 
 	// Process current node if it has a value
@@ -828,46 +906,6 @@ func setBitAtDepth(addr netip.Addr, depth int, isRight bool) (netip.Addr, bool) 
 
 	// Reconstruct the address from the modified byte slice
 	return netip.AddrFromSlice(addrBytes)
-}
-
-func (tree *Tree) walkString(n *node, prefix netip.Prefix, depth int, walkFn WalkFuncStr) error {
-	if n == nil {
-		return errors.New("node is nil")
-	}
-
-	// Process current node if it has a value
-	if n.value != nil {
-		cidrString := formatPrefixToCIDR(prefix)
-		if err := walkFn(cidrString, n.value); err != nil {
-			return fmt.Errorf("error processing node value: %w", err)
-		}
-	}
-
-	// Walk left subtree
-	if n.left != nil {
-		leftAddr, ok := setBitAtDepth(prefix.Addr(), depth, false)
-		if !ok {
-			return fmt.Errorf("failed to set bit at depth %d", depth)
-		}
-		leftPrefix := netip.PrefixFrom(leftAddr, depth+1)
-		if err := tree.walkString(n.left, leftPrefix, depth+1, walkFn); err != nil {
-			return fmt.Errorf("error walking left subtree: %w", err)
-		}
-	}
-
-	// Walk right subtree
-	if n.right != nil {
-		rightAddr, ok := setBitAtDepth(prefix.Addr(), depth, true)
-		if !ok {
-			return fmt.Errorf("failed to set bit at depth %d", depth)
-		}
-		rightPrefix := netip.PrefixFrom(rightAddr, depth+1)
-		if err := tree.walkString(n.right, rightPrefix, depth+1, walkFn); err != nil {
-			return fmt.Errorf("error walking right subtree: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // formatPrefixToCIDR converts a netip.Prefix to a CIDR string

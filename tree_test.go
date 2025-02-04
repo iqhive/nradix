@@ -2510,55 +2510,6 @@ func TestWalkV4Tree(t *testing.T) {
 
 }
 
-// Test walking tree using string
-func TestWalkV4TreeString(t *testing.T) {
-	tr := NewTree(0)
-	if tr == nil || tr.root == nil {
-		t.Error("Did not create tree properly")
-	}
-
-	netipPrefixesV4 := []netip.Prefix{}
-	for i := range testPrefixesV4 {
-		pfx, err := netip.ParsePrefix(testPrefixesV4[i])
-		if err != nil {
-			t.Errorf("failed to parse prefix: %s", err)
-		}
-		if !pfx.IsValid() {
-			t.Errorf("prefix is not valid during add: %s", pfx)
-		}
-		netipPrefixesV4 = append(netipPrefixesV4, pfx)
-	}
-
-	for i := range testPrefixesV4 {
-		tr.AddCIDRString(testPrefixesV4[i], i)
-	}
-
-	walkedDataV4 := []string{}
-	tr.WalkV4String(func(prefix string, value interface{}) error {
-		walkedDataV4 = append(walkedDataV4, prefix)
-		return nil
-	})
-
-	if len(walkedDataV4) != len(netipPrefixesV4) {
-		t.Logf("walked data len(): %+v", len(walkedDataV4))
-		t.Logf("expected data len(): %+v", len(netipPrefixesV4))
-		t.Errorf("length of walked data does not match expected data")
-	}
-
-	for i := range walkedDataV4 {
-		found := false
-		for _, pfx := range netipPrefixesV4 {
-			if walkedDataV4[i] == pfx.String() {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("walked data does not match expected data, missing prefix: %s", walkedDataV4[i])
-		}
-	}
-}
-
 // Test walking tree using netip.Prefix for IPv6
 func TestWalkV6Tree(t *testing.T) {
 	tr := NewTree(0)
@@ -2610,55 +2561,6 @@ func TestWalkV6Tree(t *testing.T) {
 	}
 }
 
-// Test walking tree using string for IPv6
-func TestWalkV6TreeString(t *testing.T) {
-	tr := NewTree(0)
-	if tr == nil || tr.root == nil {
-		t.Error("Did not create tree properly")
-	}
-
-	netipPrefixesV6 := []netip.Prefix{}
-	for i := range testPrefixesV6 { // Assume testPrefixesV6 is defined for IPv6
-		pfx, err := netip.ParsePrefix(testPrefixesV6[i])
-		if err != nil {
-			t.Errorf("failed to parse prefix: %s", err)
-		}
-		if !pfx.IsValid() {
-			t.Errorf("prefix is not valid during add: %s", pfx)
-		}
-		netipPrefixesV6 = append(netipPrefixesV6, pfx)
-	}
-
-	for i := range testPrefixesV6 {
-		tr.AddCIDRString(testPrefixesV6[i], i)
-	}
-
-	walkedDataV6 := []string{}
-	tr.WalkV6String(func(prefix string, value interface{}) error {
-		walkedDataV6 = append(walkedDataV6, prefix)
-		return nil
-	})
-
-	if len(walkedDataV6) != len(netipPrefixesV6) {
-		t.Logf("walked data len(): %+v", len(walkedDataV6))
-		t.Logf("expected data len(): %+v", len(netipPrefixesV6))
-		t.Errorf("length of walked data does not match expected data")
-	}
-
-	for i := range walkedDataV6 {
-		found := false
-		for _, pfx := range netipPrefixesV6 {
-			if walkedDataV6[i] == pfx.String() {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("walked data does not match expected data, missing prefix: %s", walkedDataV6[i])
-		}
-	}
-}
-
 // Test walking tree using netip.Prefix with both IPv4 and IPv6
 func TestWalkV4V6Tree(t *testing.T) {
 	tr := NewTree(0)
@@ -2675,6 +2577,9 @@ func TestWalkV4V6Tree(t *testing.T) {
 		if !pfx.IsValid() {
 			t.Errorf("prefix is not valid during add: %s", pfx)
 		}
+		if !pfx.Addr().Is4() {
+			t.Errorf("prefix is not IPv4 during add: %s", pfx)
+		}
 		netipPrefixesV4 = append(netipPrefixesV4, pfx)
 	}
 	netipPrefixesV6 := []netip.Prefix{}
@@ -2686,20 +2591,30 @@ func TestWalkV4V6Tree(t *testing.T) {
 		if !pfx.IsValid() {
 			t.Errorf("prefix is not valid during add: %s", pfx)
 		}
+		if !pfx.Addr().Is6() {
+			t.Errorf("prefix is not IPv6 during add: %s", pfx)
+		}
 		netipPrefixesV6 = append(netipPrefixesV6, pfx)
 	}
 
-	for i := range testPrefixesV4 {
-		tr.AddCIDRString(testPrefixesV4[i], i)
+	// for i := range testPrefixesV4 {
+	// 	tr.AddCIDRString(testPrefixesV4[i], i)
+	// }
+	// for i := range testPrefixesV6 {
+	// 	tr.AddCIDRString(testPrefixesV6[i], i)
+	// }
+
+	for i := range netipPrefixesV4 {
+		tr.AddCIDRNetIPPrefix(netipPrefixesV4[i], i)
 	}
-	for i := range testPrefixesV6 {
-		tr.AddCIDRString(testPrefixesV6[i], i)
+	for i := range netipPrefixesV6 {
+		tr.AddCIDRNetIPPrefix(netipPrefixesV6[i], i)
 	}
 
 	walkedDataV4 := []netip.Prefix{}
 	tr.WalkV4(func(prefix netip.Prefix, value interface{}) error {
 		if !prefix.IsValid() {
-			t.Errorf("v4 prefix is not valid: %s", prefix)
+			t.Errorf("v4 prefix is not valid: %s value(%v)", prefix, value)
 		}
 		walkedDataV4 = append(walkedDataV4, prefix)
 		return nil
@@ -2746,5 +2661,72 @@ func TestWalkV4V6Tree(t *testing.T) {
 				t.Errorf("walked data does not match expected data, missing prefix: %s", walkedDataV6[i])
 			}
 		}
+	}
+}
+
+func BenchmarkWalkV4Tree(b *testing.B) {
+	tr := NewTree(0)
+	if tr == nil || tr.root == nil {
+		b.Error("Did not create tree properly")
+	}
+	for i := range testPrefixesV4 {
+		tr.AddCIDRString(testPrefixesV4[i], i)
+	}
+	b.N = 20000
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tr.WalkV4(func(prefix netip.Prefix, value interface{}) error { return nil })
+	}
+}
+
+// TestWalkV4TreeWithError tests walking the tree with an error return
+func TestWalkV4TreeWithError(t *testing.T) {
+	tr := NewTree(0)
+	if tr == nil || tr.root == nil {
+		t.Error("Did not create tree properly")
+	}
+
+	// Add some test prefixes
+	tr.AddCIDRString("192.168.1.0/24", 1)
+	tr.AddCIDRString("10.0.0.0/8", 2)
+	tr.AddCIDRString("172.16.0.0/12", 3)
+
+	// Add some IPv6 test prefixes
+	tr.AddCIDRString("2001:db8::/32", 4)
+	tr.AddCIDRString("2001:0db8:85a3::/64", 5)
+
+	// Test walking with error return
+	results := make(map[netip.Prefix]interface{})
+	err := tr.WalkV4(func(prefix netip.Prefix, value interface{}) error {
+		if prefix.Addr().Is4() {
+			results[prefix] = value
+		}
+		if len(results) > 3 {
+			t.Errorf("got too many")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("Expected no error but got %v", err)
+	}
+
+	if len(results) != 3 {
+		t.Errorf("Expected walk to visit 3 nodes but got %d", len(results))
+	}
+
+	// Test walking IPv6 tree when only IPv4 prefixes are present
+	v6Results := make(map[netip.Prefix]interface{})
+	err = tr.WalkV6(func(prefix netip.Prefix, value interface{}) error {
+		v6Results[prefix] = value
+		return nil
+	})
+	if err != nil {
+		t.Errorf("Expected no error but got %v", err)
+	}
+
+	t.Logf("v6Results: %+v", v6Results)
+
+	if len(v6Results) != 2 {
+		t.Errorf("Expected 2 IPv6 prefixes but got %d", len(v6Results))
 	}
 }
