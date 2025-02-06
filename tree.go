@@ -248,7 +248,7 @@ func (tree *Tree) SetCIDRNetIPAddr(ip netip.Addr, mask netip.Prefix, val interfa
 
 // SetCIDRNetIPPrefix sets a value associated with a netip.Addr IP and netip.Prefix mask in the tree, overwriting any existing value.
 // It locks the tree for writing, determines if the IP is IPv4 or IPv6, and inserts it into the tree with overwrite enabled.
-func (tree *Tree) SetCIDRNetIPPrefix(prefix netip.Prefix, val interface{}) error {
+func (tree *Tree) SetCIDRNetIPPrefix(prefix netip.Prefix, val interface{}, overwrite bool) error {
 	tree.mutex.Lock()
 	defer tree.mutex.Unlock()
 
@@ -261,13 +261,13 @@ func (tree *Tree) SetCIDRNetIPPrefix(prefix netip.Prefix, val interface{}) error
 		ipFlat := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
 		// Use pre-computed mask table instead of shift operation
 		maskBits := ipv4MaskCache[prefix.Bits()]
-		return tree.insert4(ipFlat, maskBits, val, true)
+		return tree.insert4(ipFlat, maskBits, val, overwrite)
 	}
 
 	// For IPv6, use pre-computed mask table
 	ipv6 := prefix.Addr().As16()
 	maskv6 := getIPv6Mask(prefix.Bits())
-	return tree.insert6(ipv6[:], maskv6[:], val, true)
+	return tree.insert6(ipv6[:], maskv6[:], val, overwrite)
 }
 
 // SetCIDRb sets a value associated with an IP/mask in the tree using byte slices, overwriting any existing value.

@@ -2739,7 +2739,7 @@ func TestSetCIDRNetIPPrefix(t *testing.T) {
 
 	// Test setting a new IPv4 prefix
 	prefixV4, _ := netip.ParsePrefix("192.168.1.0/24")
-	err := tr.SetCIDRNetIPPrefix(prefixV4, 1)
+	err := tr.SetCIDRNetIPPrefix(prefixV4, 1, true)
 	if err != nil {
 		t.Errorf("Failed to set IPv4 prefix: %v", err)
 	}
@@ -2752,7 +2752,7 @@ func TestSetCIDRNetIPPrefix(t *testing.T) {
 	}
 
 	// Test updating an existing IPv4 prefix
-	err = tr.SetCIDRNetIPPrefix(prefixV4, 2)
+	err = tr.SetCIDRNetIPPrefix(prefixV4, 2, true)
 	if err != nil {
 		t.Errorf("Failed to update IPv4 prefix: %v", err)
 	}
@@ -2766,7 +2766,7 @@ func TestSetCIDRNetIPPrefix(t *testing.T) {
 
 	// Test setting a new IPv6 prefix
 	prefixV6, _ := netip.ParsePrefix("2001:db8::/32")
-	err = tr.SetCIDRNetIPPrefix(prefixV6, 3)
+	err = tr.SetCIDRNetIPPrefix(prefixV6, 3, true)
 	if err != nil {
 		t.Errorf("Failed to set IPv6 prefix: %v", err)
 	}
@@ -2779,7 +2779,7 @@ func TestSetCIDRNetIPPrefix(t *testing.T) {
 	}
 
 	// Test updating an existing IPv6 prefix
-	err = tr.SetCIDRNetIPPrefix(prefixV6, 4)
+	err = tr.SetCIDRNetIPPrefix(prefixV6, 4, true)
 	if err != nil {
 		t.Errorf("Failed to update IPv6 prefix: %v", err)
 	}
@@ -2793,7 +2793,7 @@ func TestSetCIDRNetIPPrefix(t *testing.T) {
 
 	// Test setting an overlapping prefix
 	overlapPrefixV4, _ := netip.ParsePrefix("192.168.1.0/25")
-	err = tr.SetCIDRNetIPPrefix(overlapPrefixV4, 5)
+	err = tr.SetCIDRNetIPPrefix(overlapPrefixV4, 5, true)
 	if err != nil {
 		t.Errorf("Failed to set overlapping IPv4 prefix: %v", err)
 	}
@@ -2807,7 +2807,7 @@ func TestSetCIDRNetIPPrefix(t *testing.T) {
 
 	// Test setting an invalid prefix
 	invalidPrefix, _ := netip.ParsePrefix("300.300.300.300/32")
-	err = tr.SetCIDRNetIPPrefix(invalidPrefix, 6)
+	err = tr.SetCIDRNetIPPrefix(invalidPrefix, 6, true)
 	if err == nil {
 		t.Error("Expected error for invalid prefix, got none")
 	}
