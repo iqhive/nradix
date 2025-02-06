@@ -14,20 +14,15 @@ import (
 	"sync"
 )
 
-type node struct {
-	left, right, parent *node
-	value               interface{}
-}
-
 // Tree implements a radix tree for working with IP/mask.
 // Thread safety is not guaranteed, you should choose your own style of protecting safety of operations.
 type Tree struct {
-	root   *node
-	rootV4 *node // TODO:create a short-cut for IPv4 lookups, deep in the tree
+	root   *Node
+	rootV4 *Node // TODO:create a short-cut for IPv4 lookups, deep in the tree
 
-	free *node
+	free *Node
 
-	alloc []node
+	alloc []Node
 	mutex sync.RWMutex
 }
 
@@ -48,7 +43,7 @@ var (
 // number of entries.
 func NewTree(preallocate int) *Tree {
 	tree := new(Tree)
-	tree.root = tree.newnode()
+	tree.root = tree.newnode(net.IPv6zero, net.CIDRMask(0, 128))
 
 	// Set up the IPv4 root node to optimise IPv4 lookups
 	tree.setupIPv4Root()
@@ -105,7 +100,7 @@ func (tree *Tree) setupIPv4Root() {
 		}
 
 		if next == nil {
-			next = tree.newnode()
+			next = tree.newnode(ipv6, net.CIDRMask(0, 32))
 			next.parent = node
 			if (ipv6[i] & bit) != 0 {
 				node.right = next
@@ -422,6 +417,36 @@ func (tree *Tree) FindCIDRNetIPAddr(nip netip.Addr) (interface{}, error) {
 	return tree.find6(ipm.IP, ipm.Mask), nil
 }
 
+func (tree *Tree) FindCIDRNetIPAddrWithNode(nip netip.Addr) (node *Node, value interface{}, err error) {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+	if nip.Is4() {
+		ipFlat := nip.As4()
+		node, value = tree.find32WithNode(uint32(ipFlat[0])<<24|uint32(ipFlat[1])<<16|uint32(ipFlat[2])<<8|uint32(ipFlat[3]), 0xffffffff)
+		return node, value, nil
+	}
+
+	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(64, 64)}
+	node, value = tree.find6WithNode(ipm.IP, ipm.Mask)
+	return node, value, nil
+}
+
+func (tree *Tree) FindCIDRNetIPAddrV2(nip netip.Addr) (node *Node, value interface{}, err error) {
+	tree.mutex.RLock()
+	defer tree.mutex.RUnlock()
+
+	if nip.Is4() {
+		ipFlat := nip.As4()
+		node, value = tree.find32WithNode(uint32(ipFlat[0])<<24|uint32(ipFlat[1])<<16|uint32(ipFlat[2])<<8|uint32(ipFlat[3]), 0xffffffff)
+		return node, value, nil
+	}
+
+	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(64, 64)}
+
+	node, value = tree.find6WithNode(ipm.IP, ipm.Mask)
+	return node, value, nil
+}
+
 // insert4 inserts a value into the tree for a given IPv4 key and mask.
 // It traverses the tree based on the key and mask, creating new nodes as necessary, and sets the value at the appropriate node.
 func (tree *Tree) insert4(key, mask uint32, value interface{}, overwrite bool) error {
@@ -491,11 +516,12 @@ func (tree *Tree) insert6(key net.IP, mask net.IPMask, value interface{}, overwr
 			return ErrNodeBusy
 		}
 		node.value = value
+		node.prefix = getNetIPPrefix(key, mask)
 		return nil
 	}
 
 	for bit&mask[i] != 0 {
-		next = tree.newnode()
+		next = tree.newnode(key, mask)
 		next.parent = node
 		if key[i]&bit != 0 {
 			node.right = next
@@ -511,6 +537,7 @@ func (tree *Tree) insert6(key net.IP, mask net.IPMask, value interface{}, overwr
 		}
 	}
 	node.value = value
+	node.prefix = getNetIPPrefix(key, mask)
 
 	return nil
 }
@@ -604,11 +631,19 @@ func (tree *Tree) deleteIPv6(key net.IP, mask net.IPMask, wholeRange bool) error
 // find32 finds the value associated with a given IPv4 key and mask.
 // It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
 func (tree *Tree) find32(ipv4 uint32, mask uint32) (value interface{}) {
+	_, value = tree.find32WithNode(ipv4, mask)
+	return
+}
+
+// find32 finds the value associated with a given IPv4 key and mask.
+// It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
+func (tree *Tree) find32WithNode(ipv4 uint32, mask uint32) (nodeRet *Node, value interface{}) {
 	// Start from IPv4 root if available
 	if tree.rootV4 != nil {
 		node := tree.rootV4
 		bit := startbit
 		value = node.value // Store initial value if exists
+		nodeRet = node
 
 		for node != nil && bit != 0 {
 			if mask&bit == 0 { // Move mask check to start of loop
@@ -623,11 +658,12 @@ func (tree *Tree) find32(ipv4 uint32, mask uint32) (value interface{}) {
 
 			if node != nil && node.value != nil {
 				value = node.value
+				nodeRet = node
 			}
 
 			bit >>= 1
 		}
-		return value
+		return nodeRet, value
 	}
 
 	// Fall back to existing IPv6-mapped path if rootV4 is not set
@@ -649,21 +685,30 @@ func (tree *Tree) find32(ipv4 uint32, mask uint32) (value interface{}) {
 	maskv6[14] = byte(mask >> 8)
 	maskv6[15] = byte(mask)
 
-	return tree.find6(ipv6, maskv6)
+	return tree.find6WithNode(ipv6, maskv6)
 }
 
 // find6 finds the value associated with a given IPv6 key and mask.
 // It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
 func (tree *Tree) find6(key net.IP, mask net.IPMask) (value interface{}) {
+	_, value = tree.find6WithNode(key, mask)
+	return
+}
+
+// find6WithNode finds the value associated with a given IPv6 key and mask.
+// It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
+func (tree *Tree) find6WithNode(key net.IP, mask net.IPMask) (nodeRet *Node, value interface{}) {
+	node := tree.root
+	nodeRet = node
 	if len(key) != len(mask) {
-		return ErrBadIP
+		return nodeRet, ErrBadIP
 	}
 	var i int
 	bit := startbyte
-	node := tree.root
 	for node != nil {
 		if node.value != nil {
 			value = node.value
+			nodeRet = node
 		}
 		if key[i]&bit != 0 {
 			node = node.right
@@ -679,17 +724,18 @@ func (tree *Tree) find6(key net.IP, mask net.IPMask) (value interface{}) {
 				// reached depth of the tree, there should be matching node...
 				if node != nil {
 					value = node.value
+					nodeRet = node
 				}
 				break
 			}
 		}
 	}
-	return value
+	return nodeRet, value
 }
 
 // newnode creates a new node for the tree, reusing a node from the free list if available.
 // It initializes the node's fields and returns a pointer to the new node.
-func (tree *Tree) newnode() (p *node) {
+func (tree *Tree) newnode(key net.IP, mask net.IPMask) (p *Node) {
 	if tree.free != nil {
 		p = tree.free
 		tree.free = tree.free.right
@@ -699,13 +745,14 @@ func (tree *Tree) newnode() (p *node) {
 		p.parent = nil
 		p.left = nil
 		p.value = nil
+		p.prefix = getNetIPPrefix(key, mask)
 		return p
 	}
 
 	ln := len(tree.alloc)
 	if ln == cap(tree.alloc) {
 		// filled one row, make bigger one
-		tree.alloc = make([]node, ln+200)[:1] // 200, 600, 1400, 3000, 6200, 12600 ...
+		tree.alloc = make([]Node, ln+200)[:1] // 200, 600, 1400, 3000, 6200, 12600 ...
 		ln = 0
 	} else {
 		tree.alloc = tree.alloc[:ln+1]
@@ -836,7 +883,7 @@ func (tree *Tree) WalkV6(walkFn WalkFunc) error {
 	return tree.walk(tree.root, initialPrefix, 0, walkFnWrapper)
 }
 
-func (tree *Tree) walk(n *node, prefix netip.Prefix, depth int, walkFn WalkFunc) error {
+func (tree *Tree) walk(n *Node, prefix netip.Prefix, depth int, walkFn WalkFunc) error {
 	if n == nil {
 		return errors.New("node is nil")
 	}
