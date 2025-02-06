@@ -2730,3 +2730,92 @@ func TestWalkV4TreeWithError(t *testing.T) {
 		t.Errorf("Expected 2 IPv6 prefixes but got %d", len(v6Results))
 	}
 }
+
+func TestSetCIDRNetIPPrefix(t *testing.T) {
+	tr := NewTree(0)
+	if tr == nil || tr.root == nil {
+		t.Error("Did not create tree properly")
+	}
+
+	// Test setting a new IPv4 prefix
+	prefixV4, _ := netip.ParsePrefix("192.168.1.0/24")
+	err := tr.SetCIDRNetIPPrefix(prefixV4, 1)
+	if err != nil {
+		t.Errorf("Failed to set IPv4 prefix: %v", err)
+	}
+	info, err := tr.FindCIDRString("192.168.1.0")
+	if err != nil {
+		t.Error(err)
+	}
+	if info.(int) != 1 {
+		t.Errorf("Wrong value, expected 1, got %v", info)
+	}
+
+	// Test updating an existing IPv4 prefix
+	err = tr.SetCIDRNetIPPrefix(prefixV4, 2)
+	if err != nil {
+		t.Errorf("Failed to update IPv4 prefix: %v", err)
+	}
+	info, err = tr.FindCIDRString("192.168.1.0")
+	if err != nil {
+		t.Error(err)
+	}
+	if info.(int) != 2 {
+		t.Errorf("Wrong value, expected 2, got %v", info)
+	}
+
+	// Test setting a new IPv6 prefix
+	prefixV6, _ := netip.ParsePrefix("2001:db8::/32")
+	err = tr.SetCIDRNetIPPrefix(prefixV6, 3)
+	if err != nil {
+		t.Errorf("Failed to set IPv6 prefix: %v", err)
+	}
+	info, err = tr.FindCIDRString("2001:db8::1")
+	if err != nil {
+		t.Error(err)
+	}
+	if info.(int) != 3 {
+		t.Errorf("Wrong value, expected 3, got %v", info)
+	}
+
+	// Test updating an existing IPv6 prefix
+	err = tr.SetCIDRNetIPPrefix(prefixV6, 4)
+	if err != nil {
+		t.Errorf("Failed to update IPv6 prefix: %v", err)
+	}
+	info, err = tr.FindCIDRString("2001:db8::1")
+	if err != nil {
+		t.Error(err)
+	}
+	if info.(int) != 4 {
+		t.Errorf("Wrong value, expected 4, got %v", info)
+	}
+
+	// Test setting an overlapping prefix
+	overlapPrefixV4, _ := netip.ParsePrefix("192.168.1.0/25")
+	err = tr.SetCIDRNetIPPrefix(overlapPrefixV4, 5)
+	if err != nil {
+		t.Errorf("Failed to set overlapping IPv4 prefix: %v", err)
+	}
+	info, err = tr.FindCIDRString("192.168.1.0")
+	if err != nil {
+		t.Error(err)
+	}
+	if info.(int) != 5 {
+		t.Errorf("Wrong value, expected 5, got %v", info)
+	}
+
+	// Test setting an invalid prefix
+	invalidPrefix, _ := netip.ParsePrefix("300.300.300.300/32")
+	err = tr.SetCIDRNetIPPrefix(invalidPrefix, 6)
+	if err == nil {
+		t.Error("Expected error for invalid prefix, got none")
+	}
+
+	// // Test setting a prefix with a nil tree
+	// var nilTree *Tree
+	// err = nilTree.SetCIDRNetIPPrefix(prefixV4, 7)
+	// if err == nil {
+	// 	t.Error("Expected error for nil tree, got none")
+	// }
+}
