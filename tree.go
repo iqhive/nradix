@@ -1,6 +1,7 @@
 // Copyright (C) 2015 Alex Sergeyev
 // This project is licensed under the terms of the MIT license.
 // Read LICENSE file for information for all notices and permissions.
+// (adapted from github.com/asergeyev/nradix)
 
 package nradix
 
@@ -354,7 +355,7 @@ func (tree *Tree) FindCIDRNetIPAddr(nip netip.Addr) (interface{}, error) {
 		return tree.find32(uint32(ipFlat[0])<<24|uint32(ipFlat[1])<<16|uint32(ipFlat[2])<<8|uint32(ipFlat[3]), 0xffffffff), nil
 	}
 
-	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(64, 64)}
+	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(128, 128)}
 	return tree.find6(ipm.IP, ipm.Mask), nil
 }
 
@@ -367,7 +368,7 @@ func (tree *Tree) FindCIDRNetIPAddrWithNode(nip netip.Addr) (node *Node, value i
 		return node, value, nil
 	}
 
-	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(64, 64)}
+	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(128, 128)}
 	node, value = tree.find6WithNode(ipm.IP, ipm.Mask)
 	return node, value, nil
 }
@@ -382,7 +383,7 @@ func (tree *Tree) FindCIDRNetIPAddrV2(nip netip.Addr) (node *Node, value interfa
 		return node, value, nil
 	}
 
-	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(64, 64)}
+	ipm := net.IPNet{IP: nip.AsSlice(), Mask: net.CIDRMask(128, 128)}
 
 	node, value = tree.find6WithNode(ipm.IP, ipm.Mask)
 	return node, value, nil
