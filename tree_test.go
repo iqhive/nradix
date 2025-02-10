@@ -1835,7 +1835,7 @@ func TestTree(t *testing.T) {
 	}
 
 	// Add a CIDR to the tree
-	err := tr.AddCIDRString("1.2.3.0/25", 1)
+	err := tr.SetCIDRString("1.2.3.0/25", 1, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1899,7 +1899,7 @@ func TestTree(t *testing.T) {
 	}
 
 	// Add a covering CIDR to the tree
-	err = tr.AddCIDRString("1.2.3.0/24", 2)
+	err = tr.SetCIDRString("1.2.3.0/24", 2, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1944,7 +1944,7 @@ func TestTree(t *testing.T) {
 	}
 
 	// Add internal CIDR back in
-	err = tr.AddCIDRString("1.2.3.0/25", 1)
+	err = tr.SetCIDRString("1.2.3.0/25", 1, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1974,7 +1974,7 @@ func TestTree(t *testing.T) {
 	}
 
 	// Add covering CIDR back in
-	err = tr.AddCIDRString("1.2.3.0/24", 2)
+	err = tr.SetCIDRString("1.2.3.0/24", 2, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2017,7 +2017,7 @@ func TestTreeV6(t *testing.T) {
 	}
 
 	// Add a CIDR to the tree
-	err := tr.AddCIDRString("2001:db8::/32", 1)
+	err := tr.SetCIDRString("2001:db8::/32", 1, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2081,7 +2081,7 @@ func TestTreeV6(t *testing.T) {
 	}
 
 	// Add a covering CIDR to the tree
-	err = tr.AddCIDRString("2001:db8::/31", 2)
+	err = tr.SetCIDRString("2001:db8::/31", 2, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2126,7 +2126,7 @@ func TestTreeV6(t *testing.T) {
 	}
 
 	// Add internal CIDR back in
-	err = tr.AddCIDRString("2001:db8::/32", 1)
+	err = tr.SetCIDRString("2001:db8::/32", 1, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2156,7 +2156,7 @@ func TestTreeV6(t *testing.T) {
 	}
 
 	// Add covering CIDR back in
-	err = tr.AddCIDRString("2001:db8::/31", 2)
+	err = tr.SetCIDRString("2001:db8::/31", 2, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2199,7 +2199,7 @@ func TestSetV4(t *testing.T) {
 	}
 
 	// Add a CIDR to the tree
-	tr.AddCIDRString("1.1.1.0/24", 1)
+	tr.SetCIDRString("1.1.1.0/24", 1, false)
 	info, err := tr.FindCIDRString("1.1.1.0")
 	if err != nil {
 		t.Error(err)
@@ -2209,7 +2209,7 @@ func TestSetV4(t *testing.T) {
 	}
 
 	// Add a more specific CIDR to the tree
-	tr.AddCIDRString("1.1.1.0/25", 2)
+	tr.SetCIDRString("1.1.1.0/25", 2, false)
 	info, err = tr.FindCIDRString("1.1.1.0")
 	if err != nil {
 		t.Error(err)
@@ -2226,13 +2226,13 @@ func TestSetV4(t *testing.T) {
 	}
 
 	// Add covering CIDR should fail
-	err = tr.AddCIDRString("1.1.1.0/24", 60)
+	err = tr.SetCIDRString("1.1.1.0/24", 60, false)
 	if err != ErrNodeBusy {
 		t.Errorf("Should have gotten ErrNodeBusy, instead got err: %v", err)
 	}
 
 	// Set covering CIDR
-	err = tr.SetCIDRString("1.1.1.0/24", 3)
+	err = tr.SetCIDRString("1.1.1.0/24", 3, true)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2252,7 +2252,7 @@ func TestSetV4(t *testing.T) {
 	}
 
 	// Set internal CIDR
-	err = tr.SetCIDRString("1.1.1.0/25", 4)
+	err = tr.SetCIDRString("1.1.1.0/25", 4, true)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2280,7 +2280,7 @@ func TestSetV6(t *testing.T) {
 	}
 
 	// Add a CIDR to the tree
-	tr.AddCIDRString("dead::0/16", 1)
+	tr.SetCIDRString("dead::0/16", 1, false)
 	info, err := tr.FindCIDRString("dead::beef")
 	if err != nil {
 		t.Error(err)
@@ -2290,7 +2290,7 @@ func TestSetV6(t *testing.T) {
 	}
 
 	// Add a more specific CIDR to the tree
-	tr.AddCIDRString("dead:beef::0/48", 2)
+	tr.SetCIDRString("dead:beef::0/48", 2, false)
 	info, err = tr.FindCIDRString("dead:beef::beef")
 	if err != nil {
 		t.Error(err)
@@ -2307,13 +2307,13 @@ func TestSetV6(t *testing.T) {
 	}
 
 	// Add covering CIDR should fail
-	err = tr.AddCIDRString("dead::0/16", 60)
+	err = tr.SetCIDRString("dead::0/16", 60, false)
 	if err != ErrNodeBusy {
 		t.Errorf("Should have gotten ErrNodeBusy, instead got err: %v", err)
 	}
 
 	// Set covering CIDR
-	err = tr.SetCIDRString("dead::0/16", 3)
+	err = tr.SetCIDRString("dead::0/16", 3, true)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2340,7 +2340,7 @@ func TestSetV6(t *testing.T) {
 		t.Errorf("Wrong value, expected 2, got %v", info)
 	}
 	// Set another overlapping CIDR
-	err = tr.SetCIDRString("dead:beef::0/48", 4)
+	err = tr.SetCIDRString("dead:beef::0/48", 4, true)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2368,11 +2368,11 @@ func TestRegression(t *testing.T) {
 	}
 
 	// Add a CIDR to the tree
-	tr.AddCIDRString("1.1.1.0/24", 1)
+	tr.SetCIDRString("1.1.1.0/24", 1, false)
 
 	// Delete the CIDR and add a more specific CIDR
 	tr.DeleteCIDRString("1.1.1.0/24")
-	tr.AddCIDRString("1.1.1.0/25", 2)
+	tr.SetCIDRString("1.1.1.0/25", 2, false)
 
 	// Test inside old range, outside new range
 	info, err := tr.FindCIDRString("1.1.1.128")
@@ -2391,7 +2391,7 @@ func TestTree6(t *testing.T) {
 	}
 
 	// Add an IPv6 CIDR to the tree
-	err := tr.AddCIDRString("dead::0/16", 3)
+	err := tr.SetCIDRString("dead::0/16", 3, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2415,7 +2415,7 @@ func TestTree6(t *testing.T) {
 	}
 
 	// Add a more specific IPv6 CIDR to the tree
-	err = tr.AddCIDRString("dead:beef::0/48", 4)
+	err = tr.SetCIDRString("dead:beef::0/48", 4, false)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2447,8 +2447,8 @@ func TestRegression6(t *testing.T) {
 	}
 
 	// Add IPv6 CIDRs to the tree
-	tr.AddCIDRString("2620:10f::/32", 54321)
-	tr.AddCIDRString("2620:10f:d000:100::5/128", 12345)
+	tr.SetCIDRString("2620:10f::/32", 54321, false)
+	tr.SetCIDRString("2620:10f:d000:100::5/128", 12345, false)
 
 	// Test finding the /128 IPv6 address
 	info, err := tr.FindCIDRString("2620:10f:d000:100::5/128")
@@ -2479,7 +2479,7 @@ func TestWalkV4Tree(t *testing.T) {
 	}
 
 	for i := range testPrefixesV4 {
-		tr.AddCIDRString(testPrefixesV4[i], i)
+		tr.SetCIDRString(testPrefixesV4[i], i, false)
 	}
 
 	walkedDataV4 := []netip.Prefix{}
@@ -2530,7 +2530,7 @@ func TestWalkV6Tree(t *testing.T) {
 	}
 
 	for i := range testPrefixesV6 {
-		tr.AddCIDRString(testPrefixesV6[i], i)
+		tr.SetCIDRString(testPrefixesV6[i], i, false)
 	}
 
 	walkedDataV6 := []netip.Prefix{}
@@ -2598,17 +2598,17 @@ func TestWalkV4V6Tree(t *testing.T) {
 	}
 
 	// for i := range testPrefixesV4 {
-	// 	tr.AddCIDRString(testPrefixesV4[i], i)
+	// 	tr.SetCIDRString(testPrefixesV4[i], i, false)
 	// }
 	// for i := range testPrefixesV6 {
-	// 	tr.AddCIDRString(testPrefixesV6[i], i)
+	// 	tr.SetCIDRString(testPrefixesV6[i], i, false)
 	// }
 
 	for i := range netipPrefixesV4 {
-		tr.AddCIDRNetIPPrefix(netipPrefixesV4[i], i)
+		tr.SetCIDRNetIPPrefix(netipPrefixesV4[i], i, true)
 	}
 	for i := range netipPrefixesV6 {
-		tr.AddCIDRNetIPPrefix(netipPrefixesV6[i], i)
+		tr.SetCIDRNetIPPrefix(netipPrefixesV6[i], i, true)
 	}
 
 	walkedDataV4 := []netip.Prefix{}
@@ -2670,7 +2670,7 @@ func BenchmarkWalkV4Tree(b *testing.B) {
 		b.Error("Did not create tree properly")
 	}
 	for i := range testPrefixesV4 {
-		tr.AddCIDRString(testPrefixesV4[i], i)
+		tr.SetCIDRString(testPrefixesV4[i], i, false)
 	}
 	b.N = 20000
 	b.ResetTimer()
@@ -2687,13 +2687,13 @@ func TestWalkV4TreeWithError(t *testing.T) {
 	}
 
 	// Add some test prefixes
-	tr.AddCIDRString("192.168.1.0/24", 1)
-	tr.AddCIDRString("10.0.0.0/8", 2)
-	tr.AddCIDRString("172.16.0.0/12", 3)
+	tr.SetCIDRString("192.168.1.0/24", 1, false)
+	tr.SetCIDRString("10.0.0.0/8", 2, false)
+	tr.SetCIDRString("172.16.0.0/12", 3, false)
 
 	// Add some IPv6 test prefixes
-	tr.AddCIDRString("2001:db8::/32", 4)
-	tr.AddCIDRString("2001:0db8:85a3::/64", 5)
+	tr.SetCIDRString("2001:db8::/32", 4, false)
+	tr.SetCIDRString("2001:0db8:85a3::/64", 5, false)
 
 	// Test walking with error return
 	results := make(map[netip.Prefix]interface{})
