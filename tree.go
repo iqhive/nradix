@@ -293,7 +293,33 @@ func (tree *Tree) DeleteCIDRb(cidr []byte) error {
 func (tree *Tree) FindCIDRString(cidr string) (interface{}, error) {
 	tree.mutex.RLock()
 	defer tree.mutex.RUnlock()
-	return tree.FindCIDRb([]byte(cidr))
+	
+	// Fast path for IPv4 addresses
+	if len(cidr) <= 15 && hasIPv4Format(cidr) {
+		ip, mask, err := parsecidr4([]byte(cidr))
+		if err != nil {
+			return nil, err
+		}
+		return tree.find32(ip, mask), nil
+	}
+	
+	// Handle IPv6 addresses
+	ip, mask, err := parsecidr6([]byte(cidr))
+	if err != nil || ip == nil {
+		return nil, err
+	}
+	return tree.find6(ip, mask), nil
+}
+
+// Helper function to quickly check if a string has IPv4 format
+func hasIPv4Format(s string) bool {
+	dots := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '.' {
+			dots++
+		}
+	}
+	return dots == 3
 }
 
 // FindCIDRb traverses the tree to the proper node and returns previously saved information in the longest covered IP using byte slices.
@@ -573,6 +599,33 @@ func (tree *Tree) deleteIPv6(key net.IP, mask net.IPMask, wholeRange bool) error
 // find32 finds the value associated with a given IPv4 key and mask.
 // It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
 func (tree *Tree) find32(ipv4 uint32, mask uint32) (value interface{}) {
+	// Start from IPv4 root if available for better performance
+	if tree.rootV4 != nil {
+		node := tree.rootV4
+		bit := startbit
+		value = node.value // Store initial value if exists
+
+		for node != nil && bit != 0 {
+			if mask&bit == 0 { // Move mask check to start of loop
+				break
+			}
+
+			if ipv4&bit != 0 {
+				node = node.right
+			} else {
+				node = node.left
+			}
+
+			if node != nil && node.value != nil {
+				value = node.value
+			}
+
+			bit >>= 1
+		}
+		return value
+	}
+	
+	// Fall back to existing implementation if rootV4 is not set
 	_, value = tree.find32WithNode(ipv4, mask)
 	return
 }
@@ -792,11 +845,16 @@ func (tree *Tree) WalkV4(walkFn WalkFunc) error {
 	tree.mutex.RLock()
 	defer tree.mutex.RUnlock()
 
+	// Start from IPv4 root if available for better performance
+	if tree.rootV4 != nil {
+		initialPrefix := netip.PrefixFrom(netip.IPv4Unspecified(), 0)
+		return tree.walkV4(tree.rootV4, initialPrefix, 0, walkFn)
+	}
+
 	// Wrapper function to call walkFn only for IPv4 or IPv4-mapped IPv6 prefixes
 	walkFnWrapper := func(prefix netip.Prefix, value interface{}) error {
 		if prefix.Addr().Is4In6() {
 			ip4prefix := netip.PrefixFrom(netip.AddrFrom4(prefix.Addr().As4()), prefix.Bits()-96)
-			// ip4prefix := netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
 			return walkFn(ip4prefix, value)
 		} else if prefix.Addr().Is4() {
 			return walkFn(prefix, value)
@@ -806,6 +864,56 @@ func (tree *Tree) WalkV4(walkFn WalkFunc) error {
 
 	initialPrefix := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
 	return tree.walk(tree.root, initialPrefix, 0, walkFnWrapper)
+}
+
+// Add a specialized walkV4 method for IPv4 trees
+func (tree *Tree) walkV4(n *Node, prefix netip.Prefix, depth int, walkFn WalkFunc) error {
+	if n == nil {
+		return nil
+	}
+
+	// Don't go deeper than 32 bits (the full IPv4 length)
+	const maxDepth = 32
+	if depth >= maxDepth {
+		if n.value != nil {
+			if err := walkFn(prefix, n.value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Process current node if it has a value
+	if n.value != nil {
+		if err := walkFn(prefix, n.value); err != nil {
+			return err
+		}
+	}
+
+	// Walk left subtree
+	if n.left != nil {
+		leftAddr := prefix.Addr()
+		leftPrefix := netip.PrefixFrom(leftAddr, depth+1)
+		if err := tree.walkV4(n.left, leftPrefix, depth+1, walkFn); err != nil {
+			return err
+		}
+	}
+
+	// Walk right subtree
+	if n.right != nil {
+		// Set the bit at depth to 1
+		bytes := prefix.Addr().As4()
+		byteIndex := depth / 8
+		bitIndex := depth % 8
+		bytes[byteIndex] |= 1 << (7 - bitIndex)
+		rightAddr := netip.AddrFrom4(bytes)
+		rightPrefix := netip.PrefixFrom(rightAddr, depth+1)
+		if err := tree.walkV4(n.right, rightPrefix, depth+1, walkFn); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (tree *Tree) WalkV6(walkFn WalkFunc) error {
