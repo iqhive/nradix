@@ -577,8 +577,8 @@ func (tree *Tree) find32(ipv4 uint32, mask uint32) (value interface{}) {
 	return
 }
 
-// find32 finds the value associated with a given IPv4 key and mask.
-// It traverses the tree based on the key and mask, returning the value of the longest matching prefix.
+// find32WithNode finds the value associated with a given IPv4 key and mask.
+// It traverses the tree based on the key and mask, returning both the node and value of the longest matching prefix.
 func (tree *Tree) find32WithNode(ipv4 uint32, mask uint32) (nodeRet *Node, value interface{}) {
 	// Start from IPv4 root if available
 	if tree.rootV4 != nil {
